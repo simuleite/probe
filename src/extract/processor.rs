@@ -1038,3 +1038,28 @@ pub fn extract_all_symbols_from_file(path: &Path, allow_tests: bool) -> Result<V
 fn file_extension(path: &Path) -> &str {
     path.extension().and_then(|ext| ext.to_str()).unwrap_or("")
 }
+
+/// Group symbols by their node type
+///
+/// This function takes a list of SearchResults containing symbols and groups them
+/// by their node_type (e.g., "function_item", "struct_item", "class_declaration").
+///
+/// # Arguments
+///
+/// * `symbols` - A vector of SearchResult containing symbol information
+///
+/// # Returns
+///
+/// A HashMap mapping node_type names to vectors of SearchResults
+pub fn group_symbols_by_type(symbols: Vec<SearchResult>) -> std::collections::HashMap<String, Vec<SearchResult>> {
+    let mut grouped: std::collections::HashMap<String, Vec<SearchResult>> = std::collections::HashMap::new();
+
+    for symbol in symbols {
+        grouped
+            .entry(symbol.node_type.clone())
+            .or_insert_with(Vec::new)
+            .push(symbol);
+    }
+
+    grouped
+}

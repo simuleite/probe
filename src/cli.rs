@@ -453,4 +453,30 @@ pub enum Commands {
         #[arg(short = 'm', long = "max-count")]
         max_count: Option<usize>,
     },
+
+    /// List all symbols (functions, classes, structs, etc.) in a file
+    ///
+    /// This command extracts and lists all top-level symbols from a file,
+    /// grouped by type (functions, structs, classes, etc.).
+    /// Each symbol is shown with its signature and line number.
+    ///
+    /// Example: probe outline src/main.rs
+    Outline {
+        /// File to extract symbols from
+        #[arg(value_name = "FILE")]
+        file: PathBuf,
+
+        /// Output format (default: plain)
+        /// Use 'json' for machine-readable JSON output
+        #[arg(short = 'o', long = "format", default_value = "plain", value_parser = ["plain", "json"])]
+        format: String,
+
+        /// Allow symbols from test files
+        #[arg(long = "allow-tests")]
+        allow_tests: bool,
+
+        /// Do not respect .gitignore files
+        #[arg(long = "no-gitignore")]
+        no_gitignore: bool,
+    },
 }

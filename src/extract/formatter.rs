@@ -11,6 +11,7 @@ use std::fmt::Write as FmtWrite;
 use std::path::Path;
 
 use super::outline_diff_formatter;
+use colored::Colorize;
 
 /// A single internal function that handles both dry-run and non-dry-run formatting.
 ///
@@ -642,5 +643,265 @@ pub fn get_language_from_extension(extension: &str) -> &'static str {
         "pl" | "pm" => "perl",
         "proto" => "protobuf",
         _ => "",
+    }
+}
+
+/// Format and print outline results
+///
+/// This function formats symbol outline information for a file and prints it.
+/// It supports plain text and JSON output formats.
+///
+/// # Arguments
+///
+/// * `file` - The path to the file being outlined
+/// * `grouped_symbols` - A HashMap mapping node_type names to vectors of SearchResults
+/// * `format` - The output format ("plain" or "json")
+///
+/// # Returns
+///
+/// A Result containing any error that occurred during formatting
+pub fn format_outline(
+    file: &Path,
+    grouped_symbols: &std::collections::HashMap<String, Vec<SearchResult>>,
+    format: &str,
+) -> Result<()> {
+    match format {
+        "json" => {
+            // JSON output
+            #[derive(Serialize)]
+            struct JsonOutline {
+                file: String,
+                symbols: std::collections::HashMap<String, Vec<JsonSymbol>>,
+            }
+
+            #[derive(Serialize)]
+            struct JsonSymbol {
+                name: Option<String>,
+                signature: Option<String>,
+                line: usize,
+            }
+
+            let mut json_symbols: std::collections::HashMap<String, Vec<JsonSymbol>> =
+                std::collections::HashMap::new();
+
+            for (node_type, symbols) in grouped_symbols {
+                let json_symbols_for_type: Vec<JsonSymbol> = symbols
+                    .iter()
+                    .map(|s| JsonSymbol {
+                        name: extract_symbol_name(&s.node_type, &s.code),
+                        signature: s.symbol_signature.clone(),
+                        line: s.lines.0,
+                    })
+                    .collect();
+                json_symbols.insert(node_type.clone(), json_symbols_for_type);
+            }
+
+            let outline = JsonOutline {
+                file: file.to_string_lossy().to_string(),
+                symbols: json_symbols,
+            };
+
+            let json_output = serde_json::to_string_pretty(&outline)?;
+            println!("{}", json_output);
+        }
+        "plain" | _ => {
+            // Plain text output with grouping
+            println!("{}", file.display());
+            println!("{}", "=".repeat(file.to_string_lossy().len()));
+
+            // Sort groups by type for consistent output
+            let mut sorted_types: Vec<&String> = grouped_symbols.keys().collect();
+            sorted_types.sort();
+
+            for node_type in sorted_types {
+                if let Some(symbols) = grouped_symbols.get(node_type) {
+                    // Print category header (e.g., "Functions:", "Structs:")
+                    let header = get_category_header(node_type);
+                    println!("\n  {}:", header.bold().cyan());
+
+                    // Sort symbols by line number
+                    let mut sorted_symbols = symbols.clone();
+                    sorted_symbols.sort_by(|a, b| a.lines.0.cmp(&b.lines.0));
+
+                    for symbol in sorted_symbols {
+                        let signature = symbol
+                            .symbol_signature
+                            .as_ref()
+                            .cloned()
+                            .unwrap_or_else(|| format!("{} at line {}", node_type, symbol.lines.0));
+                        println!("    {} ({})", signature, symbol.lines.0);
+                    }
+                }
+            }
+            println!();
+        }
+    }
+
+    Ok(())
+}
+
+/// Extract the symbol name from a symbol's code
+fn extract_symbol_name(node_type: &str, code: &str) -> Option<String> {
+    // For Rust function_item, try to extract the function name
+    if node_type == "function_item" {
+        if let Some(start) = code.find("fn ") {
+            let after_fn = &code[start + 3..];
+            // Get the identifier after 'fn '
+            if let Some(end) = after_fn.find(|c: char| !c.is_alphanumeric() && c != '_') {
+                return Some(after_fn[..end].to_string());
+            } else if !after_fn.is_empty() {
+                return Some(after_fn.to_string());
+            }
+        }
+    }
+
+    // For Rust struct_item
+    if node_type == "struct_item" {
+        if let Some(start) = code.find("struct ") {
+            let after_struct = &code[start + 7..];
+            if let Some(end) = after_struct.find(|c: char| !c.is_alphanumeric() && c != '_') {
+                return Some(after_struct[..end].to_string());
+            } else if !after_struct.is_empty() {
+                return Some(after_struct.to_string());
+            }
+        }
+    }
+
+    // For Rust impl_item
+    if node_type == "impl_item" {
+        // Try to extract impl block name
+        if let Some(start) = code.find("impl ") {
+            let after_impl = &code[start + 5..];
+            // Handle generic impls like `impl<T> Foo`
+            let mut end = after_impl.find(|c: char| c == '{' || c == '<' || c == '\n').unwrap_or(after_impl.len());
+            // Skip generic parameters
+            if after_impl.starts_with('<') {
+                if let Some(gt) = after_impl.find('>') {
+                    end = after_impl[gt + 1..]
+                        .find(|c: char| !c.is_whitespace())
+                        .map(|i| gt + 1 + i)
+                        .unwrap_or(end);
+                    if let Some(new_end) = after_impl[gt + 1..]
+                        .find(|c: char| !c.is_alphanumeric() && c != '_' && c != '<' && c != '>')
+                    {
+                        end = gt + 1 + new_end;
+                    }
+                }
+            } else if let Some(new_end) = after_impl.find(|c: char| !c.is_alphanumeric() && c != '_') {
+                end = new_end;
+            }
+            return Some(after_impl[..end].trim().to_string());
+        }
+    }
+
+    // For TypeScript/JavaScript
+    if node_type == "function_declaration" || node_type == "method_definition" {
+        if let Some(start) = code.find("function ") {
+            let after_fn = &code[start + 9..];
+            if let Some(end) = after_fn.find('(') {
+                return Some(after_fn[..end].to_string());
+            }
+        }
+        // For arrow functions and methods, try to find the identifier
+        if code.find(|c: char| c == '(' || c == '=').is_some() {
+            // Not a named function, return None
+        }
+    }
+
+    if node_type == "class_declaration" {
+        if let Some(start) = code.find("class ") {
+            let after_class = &code[start + 6..];
+            if let Some(end) = after_class.find(|c: char| !c.is_alphanumeric() && c != '_') {
+                return Some(after_class[..end].to_string());
+            } else if !after_class.is_empty() {
+                return Some(after_class.trim().to_string());
+            }
+        }
+    }
+
+    None
+}
+
+/// Get a human-readable category header for a node type
+fn get_category_header(node_type: &str) -> String {
+    match node_type {
+        // Rust
+        "function_item" => "Functions".to_string(),
+        "struct_item" => "Structs".to_string(),
+        "impl_item" => "Impls".to_string(),
+        "trait_item" => "Traits".to_string(),
+        "enum_item" => "Enums".to_string(),
+        "macro_rules" => "Macros".to_string(),
+        "const_item" => "Constants".to_string(),
+        "static_item" => "Statics".to_string(),
+        "type_alias" => "Type Aliases".to_string(),
+        "mod_item" => "Modules".to_string(),
+
+        // TypeScript/JavaScript
+        "method_definition" => "Methods".to_string(),
+        "function_expression" => "Functions".to_string(),
+        "arrow_function" => "Functions".to_string(),
+        "variable_declarator" => "Variables".to_string(),
+        "let_declaration" => "Variables".to_string(),
+        "type_alias_declaration" => "Type Aliases".to_string(),
+        "namespace_declaration" => "Namespaces".to_string(),
+
+        // Python
+        "function_definition" => "Functions".to_string(),
+        "class_definition" => "Classes".to_string(),
+        "async_function_definition" => "Functions".to_string(),
+
+        // Go
+        "type_spec" => "Types".to_string(),
+        "var_declaration" => "Variables".to_string(),
+
+        // Java
+        "method_declaration" => "Methods".to_string(),
+        "field_declaration" => "Fields".to_string(),
+
+        // C/C++
+        "struct_specifier" => "Structs".to_string(),
+        "union_specifier" => "Unions".to_string(),
+        "enum_specifier" => "Enums".to_string(),
+        "typedef" => "Type Defs".to_string(),
+
+        // Ruby
+        "method" => "Methods".to_string(),
+        "class" => "Classes".to_string(),
+        "module" => "Modules".to_string(),
+
+        // PHP
+        "trait_declaration" => "Traits".to_string(),
+
+        // Swift
+        "protocol_declaration" => "Protocols".to_string(),
+        "extension_declaration" => "Extensions".to_string(),
+
+        // C#
+        "struct_declaration" => "Structs".to_string(),
+        "interface_declaration" => "Interfaces".to_string(),
+        "delegate_declaration" => "Delegates".to_string(),
+
+        // Generic patterns shared across multiple languages
+        "function_declaration" => "Functions".to_string(),
+        "class_declaration" => "Classes".to_string(),
+        "const_declaration" => "Constants".to_string(),
+        "enum_declaration" => "Enums".to_string(),
+
+        // Generic fallback - capitalize the first letter
+        _ => {
+            let mut chars = node_type.chars();
+            match chars.next() {
+                Some(c) => {
+                    let prefix = if c.is_uppercase() {
+                        c.to_string()
+                    } else {
+                        c.to_uppercase().to_string()
+                    };
+                    prefix + chars.as_str()
+                }
+                None => node_type.to_string(),
+            }
+        }
     }
 }

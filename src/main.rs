@@ -11,7 +11,7 @@ mod query_validator;
 
 use cli::{Args, Commands};
 use probe_code::{
-    extract::{handle_extract, ExtractOptions},
+    extract::{handle_extract, extract_all_symbols_from_file, group_symbols_by_type, format_outline, ExtractOptions},
     search::{format_and_print_search_results, perform_probe, SearchOptions},
 };
 
@@ -54,6 +54,12 @@ struct BenchmarkParams {
     baseline: Option<String>,
     #[allow(dead_code)]
     fast: bool,
+}
+
+struct OutlineParams {
+    file: PathBuf,
+    format: String,
+    allow_tests: bool,
 }
 
 fn handle_search(params: SearchParams) -> Result<()> {
@@ -475,6 +481,42 @@ fn handle_benchmark(params: BenchmarkParams) -> Result<()> {
     Ok(())
 }
 
+fn handle_outline(params: OutlineParams) -> Result<()> {
+    // Print version for text formats
+    if params.format != "json" {
+        println!("Probe version: {}", probe_code::version::get_version());
+    }
+
+    if params.format != "json" {
+        println!("{} {}", "File:".bold().green(), params.file.display());
+        println!("{} {}", "Format:".bold().green(), params.format);
+        if params.allow_tests {
+            println!("{}", "Including test symbols".yellow());
+        }
+        println!();
+    }
+
+    // Extract all symbols from the file
+    let symbols = extract_all_symbols_from_file(&params.file, params.allow_tests)?;
+
+    if symbols.is_empty() {
+        if params.format == "json" {
+            println!("{{\"file\": \"{}\", \"symbols\": {{}}}}", params.file.display());
+        } else {
+            println!("{}", "No symbols found in file.".yellow());
+        }
+        return Ok(());
+    }
+
+    // Group symbols by type
+    let grouped = group_symbols_by_type(symbols);
+
+    // Format and print the results
+    format_outline(&params.file, &grouped, &params.format)?;
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
@@ -693,6 +735,16 @@ async fn main() -> Result<()> {
                 || std::env::var("PROBE_NO_GITIGNORE").unwrap_or_default() == "1",
             color,
             max_count,
+        })?,
+        Some(Commands::Outline {
+            file,
+            format,
+            allow_tests,
+            ..
+        }) => handle_outline(OutlineParams {
+            file,
+            format,
+            allow_tests,
         })?,
     }
 

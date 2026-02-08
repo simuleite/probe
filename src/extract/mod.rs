@@ -24,6 +24,10 @@ pub use formatter::{
 #[allow(unused_imports)]
 pub use processor::process_file_for_extraction;
 #[allow(unused_imports)]
+pub use processor::{extract_all_symbols_from_file, group_symbols_by_type};
+#[allow(unused_imports)]
+pub use formatter::format_outline;
+#[allow(unused_imports)]
 pub use prompts::PromptTemplate;
 
 use anyhow::Result;
